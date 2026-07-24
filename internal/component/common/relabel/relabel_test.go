@@ -701,13 +701,17 @@ func TestTargetLabelValidity(t *testing.T) {
 	}
 }
 
-func BenchmarkRelabel(b *testing.B) {
-	tests := []struct {
-		name   string
-		lbls   labels.Labels
-		config string
-		cfgs   []*Config
-	}{
+type relabelFixture struct {
+	name   string
+	lbls   labels.Labels
+	config string
+	cfgs   []*Config
+}
+
+// relabelBenchmarkFixtures returns the shared benchmark fixtures with their
+// relabel configs decoded.
+func relabelBenchmarkFixtures(tb testing.TB) []relabelFixture {
+	tests := []relabelFixture{
 		{
 			name: "example", // From prometheus/config/testdata/conf.good.yml.
 			config: `
@@ -846,9 +850,13 @@ func BenchmarkRelabel(b *testing.B) {
 		},
 	}
 	for i := range tests {
-		err := yaml.UnmarshalStrict([]byte(tests[i].config), &tests[i].cfgs)
-		require.NoError(b, err)
+		tests[i].cfgs = parseYAMLRelabelConfigs(tb, tests[i].config)
 	}
+	return tests
+}
+
+func BenchmarkRelabel(b *testing.B) {
+	tests := relabelBenchmarkFixtures(b)
 	for _, tt := range tests {
 		b.Run(tt.name, func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
@@ -857,6 +865,51 @@ func BenchmarkRelabel(b *testing.B) {
 			}
 		})
 	}
+}
+
+// yamlRelabelConfig mirrors the Prometheus YAML relabel schema so that test
+// fixtures can be written in the familiar YAML form. The production Config type
+// only carries Alloy syntax tags, so it can't be decoded from YAML directly.
+type yamlRelabelConfig struct {
+	SourceLabels []string `yaml:"source_labels"`
+	Separator    *string  `yaml:"separator"`
+	Regex        *string  `yaml:"regex"`
+	Modulus      uint64   `yaml:"modulus"`
+	TargetLabel  string   `yaml:"target_label"`
+	Replacement  *string  `yaml:"replacement"`
+	Action       string   `yaml:"action"`
+}
+
+// parseYAMLRelabelConfigs decodes YAML relabel fixtures into []*Config, applying
+// the same defaults as DefaultRelabelConfig for unset fields.
+func parseYAMLRelabelConfigs(tb testing.TB, s string) []*Config {
+	tb.Helper()
+
+	var raw []yamlRelabelConfig
+	require.NoError(tb, yaml.UnmarshalStrict([]byte(s), &raw))
+
+	cfgs := make([]*Config, 0, len(raw))
+	for _, r := range raw {
+		cfg := DefaultRelabelConfig
+		cfg.SourceLabels = r.SourceLabels
+		cfg.Modulus = r.Modulus
+		cfg.TargetLabel = r.TargetLabel
+		if r.Action != "" {
+			cfg.Action = Action(r.Action)
+		}
+		if r.Separator != nil {
+			cfg.Separator = *r.Separator
+		}
+		if r.Replacement != nil {
+			cfg.Replacement = *r.Replacement
+		}
+		// A nil or empty regex keeps the default "(.*)", matching Prometheus.
+		if r.Regex != nil && *r.Regex != "" {
+			cfg.Regex = MustNewRegexp(*r.Regex)
+		}
+		cfgs = append(cfgs, &cfg)
+	}
+	return cfgs
 }
 
 func TestComponentToPromRelabelConfigs(t *testing.T) {
