@@ -50,6 +50,7 @@ You can use the following argument with `discovery.relabel`:
 | Name      | Type                | Description        | Default | Required |
 | --------- | ------------------- | ------------------ | ------- | -------- |
 | `targets` | `list(map(string))` | Targets to relabel |         | yes      |
+| `max_cache_size` | `int` | Maximum number of relabeled targets retained in the LRU cache. Set to `0` to disable caching. | `100000` | no |
 
 ## Blocks
 

@@ -1,6 +1,7 @@
 package relabel_test
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -123,4 +124,106 @@ rule {
 	require.Equal(t, gotUpdated[0].Action, alloy_relabel.Drop)
 	require.Equal(t, gotUpdated[0].SourceLabels, gotOriginal[0].SourceLabels)
 	require.Equal(t, gotUpdated[0].Regex, gotOriginal[0].Regex)
+}
+
+// TestCacheMatchesUncached verifies that the cached and uncached paths produce
+// identical output for repeated updates and that changing rules invalidates the
+// cache.
+func TestCacheMatchesUncached(t *testing.T) {
+	rules := `
+targets = []
+
+rule {
+	source_labels = ["__address__", "instance"]
+	separator     = "/"
+	target_label  = "destination"
+	action        = "replace"
+}
+
+rule {
+	source_labels = ["app"]
+	action        = "keep"
+	regex         = "backend|db"
+}
+`
+	inputs := []discovery.Target{
+		discovery.NewTargetFromMap(map[string]string{"__address__": "localhost", "instance": "one", "app": "backend"}),
+		discovery.NewTargetFromMap(map[string]string{"__address__": "localhost", "instance": "two", "app": "db"}),
+		discovery.NewTargetFromMap(map[string]string{"__address__": "localhost", "instance": "three", "app": "frontend"}),
+	}
+
+	run := func(t *testing.T, cacheSize int) []discovery.Target {
+		var args relabel.Arguments
+		require.NoError(t, syntax.Unmarshal([]byte(rules), &args))
+		args.Targets = inputs
+		args.MaxCacheSize = cacheSize
+
+		tc, err := componenttest.NewControllerFromID(nil, "discovery.relabel")
+		require.NoError(t, err)
+		go func() {
+			require.NoError(t, tc.Run(componenttest.TestContext(t), args))
+		}()
+		require.NoError(t, tc.WaitExports(time.Second))
+
+		// Second identical update exercises cache hits when caching is enabled.
+		require.NoError(t, tc.Update(args))
+		return tc.Exports().(relabel.Exports).Output
+	}
+
+	uncached := run(t, 0)
+	cached := run(t, 100)
+	require.Equal(t, uncached, cached)
+	require.Len(t, cached, 2) // frontend dropped
+}
+
+func BenchmarkDiscoveryRelabel(b *testing.B) {
+	rules := `
+targets = []
+
+rule {
+	source_labels = ["__address__", "instance"]
+	separator     = "/"
+	target_label  = "destination"
+	action        = "replace"
+}
+rule {
+	action      = "labelmap"
+	regex       = "__meta_(.*)"
+	replacement = "meta_$1"
+}
+rule {
+	source_labels = ["app"]
+	action        = "keep"
+	regex         = "backend|db|frontend"
+}
+`
+	targets := make([]discovery.Target, 0, 20_000)
+	for i := 0; i < 20_000; i++ {
+		targets = append(targets, discovery.NewTargetFromMap(map[string]string{
+			"__address__": fmt.Sprintf("10.0.0.%d:9090", i%256),
+			"__meta_zone": fmt.Sprintf("zone-%d", i%3),
+			"instance":    fmt.Sprintf("instance-%d", i),
+			"app":         []string{"backend", "db", "frontend"}[i%3],
+		}))
+	}
+
+	benchCase := func(b *testing.B, cacheSize int) {
+		var args relabel.Arguments
+		require.NoError(b, syntax.Unmarshal([]byte(rules), &args))
+		args.Targets = targets
+		args.MaxCacheSize = cacheSize
+
+		tc, err := componenttest.NewControllerFromID(nil, "discovery.relabel")
+		require.NoError(b, err)
+		go func() { _ = tc.Run(componenttest.TestContext(b), args) }()
+		require.NoError(b, tc.WaitExports(time.Second))
+
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			require.NoError(b, tc.Update(args))
+		}
+	}
+
+	b.Run("cache_disabled", func(b *testing.B) { benchCase(b, 0) })
+	b.Run("cache_warm", func(b *testing.B) { benchCase(b, 50_000) })
 }

@@ -22,11 +22,9 @@ type targetBuilder struct {
 
 // NewTargetBuilder creates an empty labels builder.
 func NewTargetBuilder() TargetBuilder {
-	return targetBuilder{
+	return &targetBuilder{
 		group: nil,
-		own:   make(commonlabels.LabelSet),
-		toAdd: make(map[string]string),
-		toDel: make(map[string]struct{}),
+		own:   nil,
 	}
 }
 
@@ -35,33 +33,37 @@ func NewTargetBuilderFrom(t Target) TargetBuilder {
 }
 
 func NewTargetBuilderFromLabelSets(group, own commonlabels.LabelSet) TargetBuilder {
-	toAdd := make(map[string]string)
-	toDel := make(map[string]struct{})
+	var toDel map[string]struct{}
 
 	// if we are given labels that are set to empty value, it should be treated as deleting them
 	for name, value := range group {
 		if len(value) == 0 { // if group has empty value
 			// and own doesn't override it OR overrides it with an empty value
 			if ownValue, ok := own[name]; !ok || len(ownValue) == 0 {
+				if toDel == nil {
+					toDel = make(map[string]struct{})
+				}
 				toDel[string(name)] = struct{}{} // mark label as deleted
 			}
 		}
 	}
 	for name, value := range own {
 		if len(value) == 0 {
+			if toDel == nil {
+				toDel = make(map[string]struct{})
+			}
 			toDel[string(name)] = struct{}{}
 		}
 	}
 
-	return targetBuilder{
+	return &targetBuilder{
 		group: group,
 		own:   own,
-		toAdd: toAdd,
 		toDel: toDel,
 	}
 }
 
-func (t targetBuilder) Get(label string) string {
+func (t *targetBuilder) Get(label string) string {
 	if v, ok := t.toAdd[label]; ok {
 		return v
 	}
@@ -76,7 +78,7 @@ func (t targetBuilder) Get(label string) string {
 	return string(lv)
 }
 
-func (t targetBuilder) Range(f func(label string, value string)) {
+func (t *targetBuilder) Range(f func(label string, value string)) {
 	for k, v := range t.toAdd {
 		f(k, v)
 	}
@@ -103,15 +105,21 @@ func (t targetBuilder) Range(f func(label string, value string)) {
 	}
 }
 
-func (t targetBuilder) Set(label string, val string) {
+func (t *targetBuilder) Set(label string, val string) {
 	if val == "" { // Setting to empty is treated as deleting.
 		t.Del(label)
 		return
 	}
+	if t.toAdd == nil {
+		t.toAdd = make(map[string]string)
+	}
 	t.toAdd[label] = val
 }
 
-func (t targetBuilder) Del(labels ...string) {
+func (t *targetBuilder) Del(labels ...string) {
+	if t.toDel == nil {
+		t.toDel = make(map[string]struct{})
+	}
 	for _, label := range labels {
 		t.toDel[label] = struct{}{}
 		// If we were adding one, may need to clean it up too.
@@ -119,7 +127,7 @@ func (t targetBuilder) Del(labels ...string) {
 	}
 }
 
-func (t targetBuilder) MergeWith(target Target) TargetBuilder {
+func (t *targetBuilder) MergeWith(target Target) TargetBuilder {
 	// Not on a hot path, so doesn't really need to be optimised.
 	target.ForEachLabel(func(key string, value string) bool {
 		t.Set(key, value)
@@ -128,7 +136,7 @@ func (t targetBuilder) MergeWith(target Target) TargetBuilder {
 	return t
 }
 
-func (t targetBuilder) Target() Target {
+func (t *targetBuilder) Target() Target {
 	if len(t.toAdd) == 0 && len(t.toDel) == 0 {
 		return NewTargetFromSpecificAndBaseLabelSet(t.own, t.group)
 	}

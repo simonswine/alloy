@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"fmt"
+	"math/bits"
 	"reflect"
 	"slices"
 	"strings"
@@ -315,6 +316,34 @@ func (t Target) groupLabelsHash() uint64 {
 	}
 	slices.Sort(labelsInOrder)
 	return t.hashLabelsInOrder(labelsInOrder)
+}
+
+// RelabelFingerprint returns a stable cache key which preserves the target's
+// group/own label split. It is only a cache index; callers must verify equality
+// before using a cached value.
+func (t Target) RelabelFingerprint() uint64 {
+	return t.groupLabelsHash() ^ bits.RotateLeft64(t.HashLabelsWithPredicate(func(key string) bool {
+		_, ok := t.own[commonlabels.LabelName(key)]
+		return ok
+	}), 1) ^ uint64(len(t.group))<<32 ^ uint64(len(t.own))
+}
+
+// EqualRelabelTarget compares both label sets, unlike EqualsTarget which only
+// compares the effective labels visible to relabel rules.
+func (t Target) EqualRelabelTarget(other Target) bool {
+	return equalLabelSet(t.group, other.group) && equalLabelSet(t.own, other.own)
+}
+
+func equalLabelSet(a, b commonlabels.LabelSet) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for name, value := range a {
+		if b[name] != value {
+			return false
+		}
+	}
+	return true
 }
 
 // NOTE 1: This function is copied from Prometheus codebase (labels.StableHash()) and adapted to work correctly with Alloy types.

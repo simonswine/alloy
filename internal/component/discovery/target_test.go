@@ -1054,6 +1054,22 @@ func Benchmark_Targets_TypicalPipeline(b *testing.B) {
 	}
 }
 
+func TestRelabelTargetIdentity(t *testing.T) {
+	group := mapToLabelSet(map[string]string{"job": "api"})
+	own := mapToLabelSet(map[string]string{"instance": "one"})
+	target := NewTargetFromSpecificAndBaseLabelSet(own, group)
+
+	require := assert.New(t)
+	require.True(target.EqualRelabelTarget(NewTargetFromSpecificAndBaseLabelSet(
+		mapToLabelSet(map[string]string{"instance": "one"}),
+		mapToLabelSet(map[string]string{"job": "api"}),
+	)))
+	require.False(target.EqualRelabelTarget(NewTargetFromSpecificAndBaseLabelSet(
+		mapToLabelSet(map[string]string{"instance": "one", "job": "api"}),
+		nil,
+	)))
+}
+
 type randomCluster struct {
 	peers []peer.Peer
 	// stores results in a map to reduce the allocation noise in the benchmark
