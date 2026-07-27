@@ -12,6 +12,7 @@ import (
 	commonlabels "github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/discovery/targetgroup"
 	modellabels "github.com/prometheus/prometheus/model/labels"
+	"github.com/zeebo/xxh3"
 	"golang.org/x/exp/maps"
 
 	"github.com/grafana/alloy/internal/runtime/equality"
@@ -337,7 +338,7 @@ func (t Target) RelabelFingerprint() uint64 {
 func labelSetFingerprint(labels commonlabels.LabelSet, seed uint64) uint64 {
 	var sum, xor uint64
 	for name, value := range labels {
-		pair := mixFingerprint(seed ^ xxhash.Sum64String(string(name)) ^ bits.RotateLeft64(xxhash.Sum64String(string(value)), 23))
+		pair := mixFingerprint(seed ^ xxh3.HashString(string(name)) ^ bits.RotateLeft64(xxh3.HashString(string(value)), 23))
 		sum += pair
 		xor ^= bits.RotateLeft64(pair, 17)
 	}
