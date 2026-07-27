@@ -318,14 +318,38 @@ func (t Target) groupLabelsHash() uint64 {
 	return t.hashLabelsInOrder(labelsInOrder)
 }
 
+const (
+	groupLabelSetFingerprintSeed = 0x58d8_20f2_0247_ee43
+	ownLabelSetFingerprintSeed   = 0x63aa_8a3f_9ef0_5d27
+)
+
 // RelabelFingerprint returns a stable cache key which preserves the target's
 // group/own label split. It is only a cache index; callers must verify equality
 // before using a cached value.
 func (t Target) RelabelFingerprint() uint64 {
-	return t.groupLabelsHash() ^ bits.RotateLeft64(t.HashLabelsWithPredicate(func(key string) bool {
-		_, ok := t.own[commonlabels.LabelName(key)]
-		return ok
-	}), 1) ^ uint64(len(t.group))<<32 ^ uint64(len(t.own))
+	return labelSetFingerprint(t.group, groupLabelSetFingerprintSeed) ^
+		bits.RotateLeft64(labelSetFingerprint(t.own, ownLabelSetFingerprintSeed), 1)
+}
+
+// labelSetFingerprint combines independently hashed label pairs, so map
+// iteration order does not affect the result. Exact target equality is checked
+// on cache hits, so this only needs to be a well-distributed cache index.
+func labelSetFingerprint(labels commonlabels.LabelSet, seed uint64) uint64 {
+	var sum, xor uint64
+	for name, value := range labels {
+		pair := mixFingerprint(seed ^ xxhash.Sum64String(string(name)) ^ bits.RotateLeft64(xxhash.Sum64String(string(value)), 23))
+		sum += pair
+		xor ^= bits.RotateLeft64(pair, 17)
+	}
+	return mixFingerprint(seed ^ sum ^ bits.RotateLeft64(xor, 1) ^ uint64(len(labels)))
+}
+
+func mixFingerprint(value uint64) uint64 {
+	value ^= value >> 30
+	value *= 0xbf58476d1ce4e5b9
+	value ^= value >> 27
+	value *= 0x94d049bb133111eb
+	return value ^ value>>31
 }
 
 // EqualRelabelTarget compares both label sets, unlike EqualsTarget which only

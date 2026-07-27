@@ -1070,6 +1070,45 @@ func TestRelabelTargetIdentity(t *testing.T) {
 	)))
 }
 
+func TestRelabelFingerprint(t *testing.T) {
+	base := NewTargetFromSpecificAndBaseLabelSet(
+		mapToLabelSet(map[string]string{"instance": "one", "job": "api"}),
+		mapToLabelSet(map[string]string{"cluster": "production", "region": "us-east-1"}),
+	)
+
+	require.Equal(t, base.RelabelFingerprint(), NewTargetFromSpecificAndBaseLabelSet(
+		mapToLabelSet(map[string]string{"job": "api", "instance": "one"}),
+		mapToLabelSet(map[string]string{"region": "us-east-1", "cluster": "production"}),
+	).RelabelFingerprint())
+	require.NotEqual(t, base.RelabelFingerprint(), NewTargetFromSpecificAndBaseLabelSet(
+		mapToLabelSet(map[string]string{"instance": "one", "job": "api"}),
+		mapToLabelSet(map[string]string{"cluster": "staging", "region": "us-east-1"}),
+	).RelabelFingerprint())
+	require.NotEqual(t, base.RelabelFingerprint(), NewTargetFromSpecificAndBaseLabelSet(
+		mapToLabelSet(map[string]string{"instance": "one", "job": "api", "region": "us-east-1"}),
+		mapToLabelSet(map[string]string{"cluster": "production"}),
+	).RelabelFingerprint())
+}
+
+func BenchmarkRelabelFingerprint(b *testing.B) {
+	target := NewTargetFromMap(map[string]string{
+		"__meta_process_cgroup_path": "/system.slice/alloy.service",
+		"__meta_process_commandline": strings.Repeat("--remote-write.url=https://example.com/api/v1/write ", 20),
+		"__meta_process_cwd":         "/var/lib/alloy",
+		"__meta_process_exe":         "/usr/bin/alloy",
+		"__meta_process_uid":         "473",
+		"__meta_process_username":    "alloy",
+		"__process_pid__":            "1234",
+		"__container_id__":           "b9e74855eb67bcc650c4a0d11d5a709a83cb7014cbed575cd930f362d1a1f905",
+	})
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = target.RelabelFingerprint()
+	}
+}
+
 type randomCluster struct {
 	peers []peer.Peer
 	// stores results in a map to reduce the allocation noise in the benchmark
